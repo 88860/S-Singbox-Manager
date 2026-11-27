@@ -195,7 +195,7 @@ s Manager v26.11.27
 │   ├── 3. Enable / Disable WARP
 │   └── 4. Delete Config (with remote deregistration)
 └── 5. Status & Updates
-    ├── 1. Unlock Check (Dual-stack AI / Streaming / Region & Exit routing)
+    ├── 1. Unlock Check (Dual-stack AI / Streaming / Popular CDNs)
     ├── 2. Check Updates (sing-box core + s.sh script)
     └── 3. Uninstall (cleans service, nftables rules, configs & optional apt packages)
 ```
