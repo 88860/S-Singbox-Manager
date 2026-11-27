@@ -1617,13 +1617,13 @@ unlock_run_and_render(){
           r6=$(cat "$work_dir/${id}_6.res" 2>/dev/null); [ -n "$r6" ] || r6="err|无结果"
           st4=${r4%%|*}; txt4=${r4#*|}; col4=$(unlock_color_of "$st4"); sym4=$(unlock_symbol_of "$st4")
           st6=${r6%%|*}; txt6=${r6#*|}; col6=$(unlock_color_of "$st6"); sym6=$(unlock_symbol_of "$st6")
-          p6=$(unlock_pad_spaces "$txt4" 18)
-          res_line="    ${DIM}IPv4:${PLAIN} ${col4}${sym4} ${txt4}${PLAIN}${p6}${DIM}IPv6:${PLAIN} ${col6}${sym6} ${txt6}${PLAIN}"
+          p6=$(unlock_pad_spaces "$txt4" 14)
+          res_line="    ${DIM}v4:${PLAIN} ${col4}${sym4} ${txt4}${PLAIN}${p6}${DIM}v6:${PLAIN} ${col6}${sym6} ${txt6}${PLAIN}"
         else
           mode="4"; [ "$has_v4" = "1" ] || mode="6"
           res=$(cat "$work_dir/${id}_${mode}.res" 2>/dev/null); [ -n "$res" ] || res="err|无结果"
           st=${res%%|*}; txt=${res#*|}; col=$(unlock_color_of "$st"); sym=$(unlock_symbol_of "$st")
-          res_line="    ${DIM}IPv${mode}:${PLAIN} ${col}${sym} ${txt}${PLAIN}"
+          res_line="    ${DIM}v${mode}:${PLAIN} ${col}${sym} ${txt}${PLAIN}"
         fi
         printf '%b\n' "$res_line"
       done
