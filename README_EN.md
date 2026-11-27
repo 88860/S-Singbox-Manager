@@ -7,7 +7,7 @@
 **Pure Bash Single-File · Full-Featured Interactive sing-box Manager**
 
 
-[![Version](https://img.shields.io/badge/Version-v26.11.15-00b894?style=flat-square)](https://github.com/88860/S-Singbox-Manager)
+[![Version](https://img.shields.io/badge/Version-v26.11.27-00b894?style=flat-square)](https://github.com/88860/S-Singbox-Manager)
 [![Shell](https://img.shields.io/badge/Shell-Bash-4eaa25?style=flat-square&logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Core](https://img.shields.io/badge/Core-sing--box-0984e3?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![OS](https://img.shields.io/badge/OS-Debian%20%7C%20Ubuntu-e84393?style=flat-square&logo=debian&logoColor=white)](#quick-start)
@@ -59,7 +59,7 @@ On first launch, the script installs missing dependencies, fetches the latest ar
 | Command | Description |
 | :--- | :--- |
 | `s` | Launch the interactive main menu |
-| `s -v` / `s --version` | Display the current script version (e.g., `s v26.11.15`) |
+| `s -v` / `s --version` | Display the current script version (e.g., `s v26.11.27`) |
 
 
 ---
@@ -168,7 +168,7 @@ flowchart LR
 
 
 ```text
-s Manager v26.11.15
+s Manager v26.11.27
 ├── 1. Server Management
 │   ├── 1. Create Protocol (VLESS / Trojan / Hysteria2 / TUIC / Shadowsocks / VMess / AnyTLS / SOCKS5 / Snell)
 │   ├── 2. Delete Protocol (optionally cleans domain & certs when no ACME nodes remain)
@@ -195,8 +195,9 @@ s Manager v26.11.15
 │   ├── 3. Enable / Disable WARP
 │   └── 4. Delete Config (with remote deregistration)
 └── 5. Status & Updates
-    ├── 1. Check Updates (sing-box core + s.sh script)
-    └── 2. Uninstall (cleans service, nftables rules, configs & optional apt packages)
+    ├── 1. Unlock Check (Dual-stack AI / Streaming / Region & Exit routing)
+    ├── 2. Check Updates (sing-box core + s.sh script)
+    └── 3. Uninstall (cleans service, nftables rules, configs & optional apt packages)
 ```
 
 
@@ -252,5 +253,5 @@ systemctl restart systemd-journald
 
 
 > [!TIP]
-> To completely remove the tool and all configurations, select **`5. Status & Updates` → `2. Uninstall`** from the menu. It stops the service, flushes `nftables` hopping rules, removes config directories, and prompts to remove script-installed dependencies.
+> To completely remove the tool and all configurations, select **`5. Status & Updates` → `3. Uninstall`** from the menu. It stops the service, flushes `nftables` hopping rules, removes config directories, and prompts to remove script-installed dependencies.
 

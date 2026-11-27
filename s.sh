@@ -189,7 +189,7 @@ PKG_LOG=$SBM_DIR/apt_installed
 NET_CACHE=$SBM_DIR/net_cache
 CONFIG_LOCK=$SBM_DIR/config.lock
 SELF=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")
-SCRIPT_VERSION="26.11.15"
+SCRIPT_VERSION="26.11.27"
 SHORTCUT=/usr/local/bin/s
 CORE=/usr/local/bin/sing-box
 SERVICE_UNIT=/etc/systemd/system/sing-box.service
@@ -890,6 +890,729 @@ run_uninstall(){
   exit 0
 }
 
+UNLOCK_UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+UNLOCK_GOOGLE_COOKIE='CONSENT=YES+cb.20210328-17-p0.en+FX+999; SOCS=CAESHAgBEhJnd3NfMjAyNDA5MDUtMF9SQzIaAmVuIAEaBgiA_N62Bg'
+
+# 执行基于当前出口路由的 HTTP 探测（禁用代理环境变量与网卡绑定，确保始终走当前出口 IP）
+unlock_curl_do(){
+  local mode=$1 hdr=$2 body=$3 url=$4; shift 4
+  local meta="" rc=0
+  : >"$hdr"; : >"$body"
+  UNLOCK_CURL_RC=0
+  UNLOCK_HTTP_CODE="000"
+  UNLOCK_EFF_URL=""
+  meta=$(curl -"$mode" --noproxy '*' -sS --connect-timeout 3 --max-time 6 \
+    -A "$UNLOCK_UA" -H "Accept-Language: en-US,en;q=0.9" \
+    -D "$hdr" -o "$body" -w '%{http_code}\t%{url_effective}' "$@" "$url" 2>/dev/null) || rc=$?
+  UNLOCK_CURL_RC=$rc
+  if [ -n "$meta" ]; then
+    UNLOCK_HTTP_CODE=${meta%%$'\t'*}
+    UNLOCK_EFF_URL=${meta#*$'\t'}
+  fi
+  [ "$rc" -eq 0 ] && [ "$UNLOCK_HTTP_CODE" != "000" ]
+}
+
+unlock_curl_err_result(){
+  local mode=$1 rc=$2
+  if [ "$rc" = "6" ]; then
+    [ "$mode" = "6" ] && printf 'na|不支持v6' || printf 'err|解析失败'
+  elif [ "$rc" = "28" ]; then
+    printf 'err|连接超时'
+  else
+    printf 'err|不可达'
+  fi
+}
+
+unlock_sanitize_cc(){
+  local cc=${1^^}
+  [[ "$cc" =~ ^[A-Z]{2,3}$ ]] && printf '%s' "$cc"
+}
+
+unlock_iso3_to_iso2(){
+  case "${1^^}" in
+    USA) printf 'US' ;; GBR) printf 'GB' ;; JPN) printf 'JP' ;; SGP) printf 'SG' ;;
+    TWN) printf 'TW' ;; HKG) printf 'HK' ;; MAC) printf 'MO' ;; KOR) printf 'KR' ;;
+    DEU) printf 'DE' ;; FRA) printf 'FR' ;; CAN) printf 'CA' ;; AUS) printf 'AU' ;;
+    NLD) printf 'NL' ;; IND) printf 'IN' ;; BRA) printf 'BR' ;; CHN) printf 'CN' ;;
+    RUS) printf 'RU' ;; IDN) printf 'ID' ;; MYS) printf 'MY' ;; THA) printf 'TH' ;;
+    VNM) printf 'VN' ;; PHL) printf 'PH' ;; ITA) printf 'IT' ;; ESP) printf 'ES' ;;
+    CHE) printf 'CH' ;; SWE) printf 'SE' ;; NOR) printf 'NO' ;; FIN) printf 'FI' ;;
+    POL) printf 'PL' ;; TUR) printf 'TR' ;; ARE) printf 'AE' ;; SAU) printf 'SA' ;;
+    ARG) printf 'AR' ;; MEX) printf 'MX' ;; NZL) printf 'NZ' ;; ZAF) printf 'ZA' ;;
+    UKR) printf 'UA' ;; IRL) printf 'IE' ;; AUT) printf 'AT' ;; BEL) printf 'BE' ;;
+    PRT) printf 'PT' ;; DNK) printf 'DK' ;; ISR) printf 'IL' ;; *) unlock_sanitize_cc "$1" ;;
+  esac
+}
+
+unlock_cf_trace_loc(){
+  local mode=$1 url=$2 hdr=$3 body=$4
+  if unlock_curl_do "$mode" "$hdr" "$body" "$url"; then
+    awk -F= '$1=="loc"{gsub(/\r/,"",$2); if($2 ~ /^[A-Za-z]{2}$/) print toupper($2); exit}' "$body" 2>/dev/null
+  fi
+}
+
+unlock_is_cf_challenge(){
+  local hdr=$1 body=$2
+  grep -qiE '^cf-mitigated:[[:space:]]*challenge' "$hdr" 2>/dev/null && return 0
+  grep -qiE 'Just a moment|cf-chl-|Attention Required!|Enable JavaScript and cookies to continue' "$body" 2>/dev/null
+}
+
+unlock_probe_chatgpt_web(){
+  local mode=$1 pfx=$2
+  local hdr="${pfx}.hdr" body="${pfx}.body" loc=""
+  loc=$(unlock_cf_trace_loc "$mode" "https://chatgpt.com/cdn-cgi/trace" "$hdr" "$body")
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://chatgpt.com/" -L --max-redirs 3; then
+    unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+  fi
+  if grep -qiE 'unsupported_country|not available in your country|services are not available' "$body" 2>/dev/null; then
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  elif unlock_is_cf_challenge "$hdr" "$body"; then
+    printf 'blocked|风控拦截%s' "${loc:+ ($loc)}"
+  elif [ "$UNLOCK_HTTP_CODE" = "429" ]; then
+    printf 'blocked|请求受限%s' "${loc:+ ($loc)}"
+  elif [ "$UNLOCK_HTTP_CODE" = "403" ]; then
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  elif [ "$UNLOCK_HTTP_CODE" = "200" ]; then
+    printf 'ok|解锁%s' "${loc:+ ($loc)}"
+  else
+    printf 'fail|异常(%s)%s' "$UNLOCK_HTTP_CODE" "${loc:+ ($loc)}"
+  fi
+}
+
+unlock_probe_chatgpt_api(){
+  local mode=$1 pfx=$2
+  local hdr="${pfx}.hdr" body="${pfx}.body" loc=""
+  local ios_state="fail" api_state="fail" err_rc=0
+  loc=$(unlock_cf_trace_loc "$mode" "https://api.openai.com/cdn-cgi/trace" "$hdr" "$body")
+  [ -n "$loc" ] || loc=$(unlock_cf_trace_loc "$mode" "https://chatgpt.com/cdn-cgi/trace" "$hdr" "$body")
+
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://ios.chat.openai.com/public-api/mobile/server_status/v1" -L --max-redirs 2; then
+    ios_state="err"; err_rc=$UNLOCK_CURL_RC
+  elif grep -qiE 'unsupported_country|not available in your country' "$body" 2>/dev/null; then
+    ios_state="unavail"
+  elif [ "$UNLOCK_HTTP_CODE" = "200" ] && grep -q '"status"' "$body" 2>/dev/null; then
+    ios_state="ok"
+  elif [ "$UNLOCK_HTTP_CODE" = "429" ] || { [ "$UNLOCK_HTTP_CODE" = "403" ] && unlock_is_cf_challenge "$hdr" "$body"; }; then
+    ios_state="blk"
+  elif [ "$UNLOCK_HTTP_CODE" = "403" ]; then
+    ios_state="unavail"
+  fi
+
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://api.openai.com/v1/models"; then
+    api_state="err"; [ "$err_rc" -eq 0 ] && err_rc=$UNLOCK_CURL_RC
+  elif grep -qiE 'unsupported_country_region_territory|unsupported_country' "$body" 2>/dev/null; then
+    api_state="unavail"
+  elif [ "$UNLOCK_HTTP_CODE" = "401" ] || [ "$UNLOCK_HTTP_CODE" = "200" ]; then
+    api_state="ok"
+  elif [ "$UNLOCK_HTTP_CODE" = "429" ] || { [ "$UNLOCK_HTTP_CODE" = "403" ] && unlock_is_cf_challenge "$hdr" "$body"; }; then
+    api_state="blk"
+  elif [ "$UNLOCK_HTTP_CODE" = "403" ]; then
+    api_state="unavail"
+  fi
+
+  if [ "$ios_state" = "ok" ] && [ "$api_state" = "ok" ]; then
+    printf 'ok|解锁%s' "${loc:+ ($loc)}"
+  elif [ "$ios_state" = "ok" ]; then
+    printf 'partial|仅App%s' "${loc:+ ($loc)}"
+  elif [ "$api_state" = "ok" ]; then
+    printf 'partial|仅API%s' "${loc:+ ($loc)}"
+  elif [ "$ios_state" = "err" ] && [ "$api_state" = "err" ]; then
+    unlock_curl_err_result "$mode" "$err_rc"
+  elif [ "$ios_state" = "unavail" ] || [ "$api_state" = "unavail" ]; then
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  elif [ "$ios_state" = "blk" ] || [ "$api_state" = "blk" ]; then
+    printf 'blocked|风控拦截%s' "${loc:+ ($loc)}"
+  else
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  fi
+}
+
+unlock_probe_claude(){
+  local mode=$1 pfx=$2
+  local hdr="${pfx}.hdr" body="${pfx}.body" loc=""
+  loc=$(unlock_cf_trace_loc "$mode" "https://claude.ai/cdn-cgi/trace" "$hdr" "$body")
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://claude.ai/login" -L --max-redirs 3; then
+    unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+  fi
+  if [[ "$UNLOCK_EFF_URL" =~ unavailable|unsupported ]] || grep -qiE 'app-unavailable-in-region|unavailable in your region|not available in your country' "$body" 2>/dev/null; then
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  elif [ "$UNLOCK_HTTP_CODE" = "403" ] && unlock_is_cf_challenge "$hdr" "$body"; then
+    if unlock_curl_do "$mode" "$hdr" "$body" "https://api.anthropic.com/v1/messages" -X POST -H "content-type: application/json" -d '{}' &&
+       [[ "$UNLOCK_HTTP_CODE" =~ ^(401|400|405)$ ]] &&
+       ! grep -qiE 'unsupported|not available in your|region' "$body" 2>/dev/null; then
+      printf 'partial|仅API%s' "${loc:+ ($loc)}"
+    else
+      printf 'blocked|风控拦截%s' "${loc:+ ($loc)}"
+    fi
+  elif [ "$UNLOCK_HTTP_CODE" = "429" ]; then
+    printf 'blocked|请求受限%s' "${loc:+ ($loc)}"
+  elif [ "$UNLOCK_HTTP_CODE" = "403" ]; then
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  elif [ "$UNLOCK_HTTP_CODE" = "200" ]; then
+    printf 'ok|解锁%s' "${loc:+ ($loc)}"
+  else
+    printf 'fail|异常(%s)%s' "$UNLOCK_HTTP_CODE" "${loc:+ ($loc)}"
+  fi
+}
+
+unlock_probe_gemini(){
+  local mode=$1 pfx=$2
+  local hdr="${pfx}.hdr" body="${pfx}.body" cc3="" loc=""
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://gemini.google.com/" -L --max-redirs 5 -H "Cookie: $UNLOCK_GOOGLE_COOKIE"; then
+    unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+  fi
+  if [[ "$UNLOCK_EFF_URL" == *"sorry.google.com"* ]] || [ "$UNLOCK_HTTP_CODE" = "429" ]; then
+    printf 'blocked|触发验证'; return
+  fi
+  cc3=$(grep -oE ',2,1,200,"[A-Z]{3}"' "$body" 2>/dev/null | head -1 | sed -E 's/.*,"([A-Z]{3})"$/\1/')
+  [ -n "$cc3" ] && loc=$(unlock_iso3_to_iso2 "$cc3")
+  if [ "$UNLOCK_HTTP_CODE" = "451" ] || [[ "$UNLOCK_EFF_URL" =~ unavailable|supported-countries|/faq ]] ||
+     grep -qiE "isn't currently supported in your country|not available in your country|currently unavailable in your country" "$body" 2>/dev/null; then
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  elif grep -q '45631641,null,true' "$body" 2>/dev/null || { [ "$UNLOCK_HTTP_CODE" = "200" ] && grep -qi 'gemini' "$body" 2>/dev/null; }; then
+    printf 'ok|解锁%s' "${loc:+ ($loc)}"
+  elif [ "$UNLOCK_HTTP_CODE" = "200" ]; then
+    printf 'partial|受限%s' "${loc:+ ($loc)}"
+  else
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  fi
+}
+
+unlock_probe_grok(){
+  local mode=$1 pfx=$2
+  local hdr="${pfx}.hdr" body="${pfx}.body" loc="" rest_ok=0
+  loc=$(unlock_cf_trace_loc "$mode" "https://grok.com/cdn-cgi/trace" "$hdr" "$body")
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://grok.com/" -L --max-redirs 3 --compressed; then
+    unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+  fi
+  if [ -z "$loc" ]; then
+    loc=$(grep -oE '\\"countryCode\\":\\"[A-Z]{2}\\"' "$body" 2>/dev/null | head -1 | sed -E 's/.*\\"([A-Z]{2})\\"$/\1/')
+    loc=$(unlock_sanitize_cc "$loc")
+  fi
+  if grep -qiE 'not available in your country|not available in your region|restricted in your region|country is not supported' "$body" 2>/dev/null; then
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"; return
+  elif [ "$UNLOCK_HTTP_CODE" = "403" ] && unlock_is_cf_challenge "$hdr" "$body"; then
+    if unlock_curl_do "$mode" "$hdr" "$body" "https://api.x.ai/v1/models" &&
+       [[ "$UNLOCK_HTTP_CODE" =~ ^(401|400)$ ]] &&
+       ! grep -qiE 'unsupported|not available in your|region' "$body" 2>/dev/null; then
+      printf 'partial|仅API%s' "${loc:+ ($loc)}"
+    else
+      printf 'blocked|风控拦截%s' "${loc:+ ($loc)}"
+    fi
+    return
+  elif [ "$UNLOCK_HTTP_CODE" = "429" ]; then
+    printf 'blocked|请求受限%s' "${loc:+ ($loc)}"; return
+  elif [ "$UNLOCK_HTTP_CODE" = "403" ] || [ "$UNLOCK_HTTP_CODE" = "451" ]; then
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"; return
+  elif [ "$UNLOCK_HTTP_CODE" != "200" ]; then
+    printf 'fail|异常(%s)%s' "$UNLOCK_HTTP_CODE" "${loc:+ ($loc)}"; return
+  fi
+
+  if unlock_curl_do "$mode" "$hdr" "$body" "https://grok.com/rest/app-chat/conversations"; then
+    if [ "$UNLOCK_HTTP_CODE" = "401" ] || [ "$UNLOCK_HTTP_CODE" = "200" ]; then
+      rest_ok=1
+    elif grep -qiE 'not available|unsupported|country|region' "$body" 2>/dev/null && ! grep -qi 'unauthenticated' "$body" 2>/dev/null; then
+      printf 'fail|未解锁%s' "${loc:+ ($loc)}"; return
+    elif [ "$UNLOCK_HTTP_CODE" = "403" ]; then
+      printf 'blocked|风控拦截%s' "${loc:+ ($loc)}"; return
+    fi
+  fi
+  if [ "$rest_ok" = "1" ] || [ "$UNLOCK_HTTP_CODE" = "401" ]; then
+    printf 'ok|解锁%s' "${loc:+ ($loc)}"
+  else
+    printf 'ok|解锁%s' "${loc:+ ($loc)}"
+  fi
+}
+
+unlock_netflix_extract_region(){
+  local hdr=$1 eff_url=$2 body=$3 orig_url="" cc=""
+  orig_url=$(awk 'BEGIN{IGNORECASE=1} /^x-originating-url:/{u=$2} END{gsub(/\r/,"",u); print u}' "$hdr" 2>/dev/null)
+  [ -n "$orig_url" ] || orig_url="$eff_url"
+  if [[ "$orig_url" =~ netflix\.com/([a-zA-Z]{2})(-[a-zA-Z]+)?/title/ ]]; then
+    cc=${BASH_REMATCH[1]}
+  elif [[ "$orig_url" =~ netflix\.com/title/ ]]; then
+    cc="US"
+  fi
+  if [ -z "$cc" ]; then
+    cc=$(grep -oE '"(countryCode|currentCountry)"[[:space:]]*:[[:space:]]*"[A-Z]{2}"' "$body" 2>/dev/null | head -1 | sed -E 's/.*"([A-Z]{2})"$/\1/')
+  fi
+  unlock_sanitize_cc "$cc"
+}
+
+unlock_probe_netflix(){
+  local mode=$1 pfx=$2
+  local hdr="${pfx}.hdr" body="${pfx}.body" loc=""
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://www.netflix.com/title/81280792" -L --max-redirs 3; then
+    unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+  fi
+  if [ "$UNLOCK_HTTP_CODE" = "200" ]; then
+    loc=$(unlock_netflix_extract_region "$hdr" "$UNLOCK_EFF_URL" "$body")
+    printf 'ok|完整解锁%s' "${loc:+ ($loc)}"
+  elif [ "$UNLOCK_HTTP_CODE" = "404" ] || [ "$UNLOCK_HTTP_CODE" = "403" ]; then
+    if ! unlock_curl_do "$mode" "$hdr" "$body" "https://www.netflix.com/title/80018499" -L --max-redirs 3; then
+      unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+    fi
+    if [ "$UNLOCK_HTTP_CODE" = "200" ]; then
+      loc=$(unlock_netflix_extract_region "$hdr" "$UNLOCK_EFF_URL" "$body")
+      printf 'orig|仅自制剧%s' "${loc:+ ($loc)}"
+    elif [ "$UNLOCK_HTTP_CODE" = "403" ]; then
+      printf 'blocked|风控拦截'
+    else
+      printf 'fail|未解锁'
+    fi
+  else
+    printf 'fail|异常(%s)' "$UNLOCK_HTTP_CODE"
+  fi
+}
+
+unlock_probe_disney(){
+  local mode=$1 pfx=$2
+  local hdr="${pfx}.hdr" body="${pfx}.body" assertion="" token="" loc=""
+  local auth='Bearer ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadnefEAY84'
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://disney.api.edge.bamgrid.com/devices" \
+    -X POST -H "Authorization: $auth" -H "Content-Type: application/json; charset=UTF-8" \
+    -d '{"deviceFamily":"browser","applicationRuntime":"chrome","deviceProfile":"windows","attributes":{}}'; then
+    unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+  fi
+  assertion=$(jq -r '.assertion // empty' "$body" 2>/dev/null)
+  if [ -n "$assertion" ]; then
+    if ! unlock_curl_do "$mode" "$hdr" "$body" "https://disney.api.edge.bamgrid.com/token" \
+      -X POST -H "Authorization: $auth" -H "Content-Type: application/x-www-form-urlencoded" \
+      --data-urlencode "grant_type=urn:ietf:params:oauth:grant-type:token-exchange" \
+      --data-urlencode "latitude=0" --data-urlencode "longitude=0" --data-urlencode "platform=browser" \
+      --data-urlencode "subject_token=${assertion}" \
+      --data-urlencode "subject_token_type=urn:bamtech:params:oauth:token-type:device"; then
+      unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+    fi
+    token=$(jq -r '.access_token // empty' "$body" 2>/dev/null)
+    loc=$(jq -r '.extensions.sdk.token.location.countryCode // .token.location.countryCode // empty' "$body" 2>/dev/null)
+    [ -n "$loc" ] || loc=$(grep -oE '"countryCode"[[:space:]]*:[[:space:]]*"[A-Z]{2}"' "$body" 2>/dev/null | head -1 | sed -E 's/.*"([A-Z]{2})"$/\1/')
+    loc=$(unlock_sanitize_cc "$loc")
+    if [ -n "$token" ]; then
+      printf 'ok|解锁%s' "${loc:+ ($loc)}"; return
+    fi
+  fi
+  if grep -qiE 'forbidden-location|unreliable-location|unauthorized_client' "$body" 2>/dev/null; then
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  elif unlock_curl_do "$mode" "$hdr" "$body" "https://www.disneyplus.com/" -L --max-redirs 3 &&
+       grep -qiE 'coming soon|preview' "$body" 2>/dev/null; then
+    printf 'partial|即将上线'
+  else
+    printf 'fail|未解锁'
+  fi
+}
+
+unlock_probe_youtube(){
+  local mode=$1 pfx=$2
+  local hdr="${pfx}.hdr" body="${pfx}.body" loc=""
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://www.youtube.com/premium" -L --max-redirs 3 -H "Cookie: $UNLOCK_GOOGLE_COOKIE"; then
+    unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+  fi
+  if [[ "$UNLOCK_EFF_URL" == *"sorry.google.com"* ]] || [ "$UNLOCK_HTTP_CODE" = "429" ]; then
+    printf 'blocked|触发验证'; return
+  fi
+  loc=$(grep -oE '"(INNERTUBE_CONTEXT_GL|countryCode)"[[:space:]]*:[[:space:]]*"[A-Z]{2}"' "$body" 2>/dev/null | head -1 | sed -E 's/.*"([A-Z]{2})"$/\1/')
+  loc=$(unlock_sanitize_cc "$loc")
+  if grep -qiE 'Premium is not available in your country|YouTube Premium is not available|This offer is not available' "$body" 2>/dev/null || [ "$loc" = "CN" ]; then
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  elif [ "$UNLOCK_HTTP_CODE" = "200" ] && grep -q 'ytcfg' "$body" 2>/dev/null; then
+    printf 'ok|解锁%s' "${loc:+ ($loc)}"
+  else
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  fi
+}
+
+unlock_probe_tiktok(){
+  local mode=$1 pfx=$2
+  local hdr="${pfx}.hdr" body="${pfx}.body" loc="" has_ctx=0
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://www.tiktok.com/" -L --max-redirs 3 --compressed; then
+    unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+  fi
+  if grep -q '"webapp\.app-context"' "$body" 2>/dev/null; then
+    has_ctx=1
+    loc=$(grep -oE '"webapp\.app-context":\{[^}]*"region":"[A-Z]{2}"' "$body" 2>/dev/null | head -1 | sed -E 's/.*"([A-Z]{2})"$/\1/')
+  fi
+  [ -n "$loc" ] || loc=$(grep -oE '"(region|regionCode)"[[:space:]]*:[[:space:]]*"[A-Z]{2}"' "$body" 2>/dev/null | head -1 | sed -E 's/.*"([A-Z]{2})"$/\1/')
+  loc=$(unlock_sanitize_cc "$loc")
+  if [ "$UNLOCK_HTTP_CODE" = "403" ] || [ "$UNLOCK_HTTP_CODE" = "451" ] || [ "$loc" = "HK" ] || [ "$loc" = "CN" ]; then
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  elif [ "$UNLOCK_HTTP_CODE" = "200" ] && [ "$has_ctx" = "1" ] && [ -n "$loc" ]; then
+    printf 'ok|解锁 (%s)' "$loc"
+  elif [ "$has_ctx" = "0" ] && grep -qiE "TikTok isn't available|not available in your|access denied" "$body" 2>/dev/null; then
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  elif [ "$UNLOCK_HTTP_CODE" = "200" ]; then
+    grep -qiE 'captcha|verify' "$body" 2>/dev/null && printf 'blocked|触发验证' || printf 'ok|解锁%s' "${loc:+ ($loc)}"
+  else
+    printf 'fail|异常(%s)' "$UNLOCK_HTTP_CODE"
+  fi
+}
+
+unlock_probe_spotify(){
+  local mode=$1 pfx=$2
+  local hdr="${pfx}.hdr" body="${pfx}.body" launched="" loc="" sp_status=""
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://spclient.wg.spotify.com/signup/public/v1/account" \
+    -X POST -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "birth_day=11&birth_month=11&birth_year=2000&collect_personal_info=undefined&creation_flow=&creation_point=https%3A%2F%2Fwww.spotify.com%2Fhk-en%2F&displayname=test&gender=male&iagree=1&key=a1e486e2729f46d6bb368d6b2bcda326&platform=www&referrer=&send-email=0&thirdpartyemail=0&validate=1"; then
+    unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+  fi
+  launched=$(jq -r 'if has("is_country_launched") then (.is_country_launched|tostring) else empty end' "$body" 2>/dev/null)
+  loc=$(jq -r '.country // empty' "$body" 2>/dev/null)
+  loc=$(unlock_sanitize_cc "$loc")
+  sp_status=$(jq -r '.status // empty' "$body" 2>/dev/null)
+  if [ "$launched" = "true" ]; then
+    printf 'ok|解锁%s' "${loc:+ ($loc)}"
+  elif [ "$launched" = "false" ]; then
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  elif [ "$sp_status" = "320" ] || [ "$sp_status" = "1" ] || [ -n "$loc" ]; then
+    printf 'ok|解锁%s' "${loc:+ ($loc)}"
+  elif [ "$UNLOCK_HTTP_CODE" = "403" ] || [ "$UNLOCK_HTTP_CODE" = "429" ] || grep -qi 'captcha' "$body" 2>/dev/null; then
+    if unlock_curl_do "$mode" "$hdr" "$body" "https://open.spotify.com/" -L --max-redirs 3 &&
+       [ "$UNLOCK_HTTP_CODE" = "200" ] && ! grep -qiE 'not available in your country|unavailable' "$body" 2>/dev/null; then
+      printf 'ok|解锁'
+    else
+      printf 'blocked|风控拦截'
+    fi
+  else
+    printf 'fail|未解锁'
+  fi
+}
+
+unlock_probe_prime(){
+  local mode=$1 pfx=$2
+  local hdr="${pfx}.hdr" body="${pfx}.body" ck="${pfx}.ck" loc="" attempt=0
+  while [ "$attempt" -lt 3 ]; do
+    if ! unlock_curl_do "$mode" "$hdr" "$body" "https://www.primevideo.com/offers/nonprimehomepage/ref=dv_web_force_root" \
+      -L --max-redirs 3 --compressed -c "$ck" -b "$ck" \
+      -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"; then
+      unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+    fi
+    [ "$UNLOCK_HTTP_CODE" = "503" ] || break
+    attempt=$((attempt + 1))
+  done
+  loc=$(grep -oE '"currentTerritory"[[:space:]]*:[[:space:]]*"[A-Z]{2}"' "$body" 2>/dev/null | head -1 | sed -E 's/.*"([A-Z]{2})"$/\1/')
+  loc=$(unlock_sanitize_cc "$loc")
+  if grep -qiE 'isBlockedByGeoRestriction|not available in your location|Service not available in your area' "$body" 2>/dev/null; then
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  elif [ "$UNLOCK_HTTP_CODE" = "403" ]; then
+    printf 'blocked|风控拦截%s' "${loc:+ ($loc)}"
+  elif [ "$UNLOCK_HTTP_CODE" = "200" ] && [ -n "$loc" ]; then
+    printf 'ok|解锁 (%s)' "$loc"
+  elif [ "$UNLOCK_HTTP_CODE" = "200" ]; then
+    printf 'fail|未解锁'
+  else
+    printf 'fail|异常(%s)' "$UNLOCK_HTTP_CODE"
+  fi
+}
+
+unlock_probe_max(){
+  local mode=$1 pfx=$2
+  local hdr="${pfx}.hdr" body="${pfx}.body" loc="" code="" eff=""
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://www.hbomax.com/" -L --max-redirs 5 --compressed; then
+    unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+  fi
+  code=$UNLOCK_HTTP_CODE
+  eff=$UNLOCK_EFF_URL
+  if [[ "$eff" =~ (max|hbomax)\.com/([a-zA-Z]{2})(-[a-zA-Z]+)?(/|$) ]]; then
+    loc=${BASH_REMATCH[2]}
+  fi
+  if [ -z "$loc" ]; then
+    local hdr2="${pfx}.g.hdr" body2="${pfx}.g.body"
+    if unlock_curl_do "$mode" "$hdr2" "$body2" "https://geo.ngtv.io/locate"; then
+      loc=$(jq -r '.country_alpha2 // .countryCode // .country // empty' "$body2" 2>/dev/null)
+    fi
+    rm -f -- "$hdr2" "$body2"
+  fi
+  loc=$(unlock_sanitize_cc "$loc")
+  if [[ "$eff" =~ unavailable|not-available|/geo-availability|/geo ]] ||
+     grep -qiE "Not Available in Your Region|isn't available in your region|not yet available in your area|Max isn't available|HBO Max isn't available|Uncharted Territory" "$body" 2>/dev/null; then
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  elif [ "$code" = "403" ]; then
+    unlock_is_cf_challenge "$hdr" "$body" && printf 'blocked|风控拦截%s' "${loc:+ ($loc)}" || printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  elif [ "$code" = "200" ]; then
+    printf 'ok|解锁%s' "${loc:+ ($loc)}"
+  else
+    printf 'fail|未解锁%s' "${loc:+ ($loc)}"
+  fi
+}
+
+unlock_probe_bahamut(){
+  local mode=$1 pfx=$2
+  local hdr="${pfx}.hdr" body="${pfx}.body" ck="${pfx}.ck" dev_id=""
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://ani.gamer.com.tw/ajax/getdeviceid.php" -c "$ck" -L --max-redirs 2; then
+    unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+  fi
+  dev_id=$(jq -r '.deviceid // empty' "$body" 2>/dev/null)
+  if [ -z "$dev_id" ]; then
+    if [ "$UNLOCK_HTTP_CODE" = "403" ] && unlock_is_cf_challenge "$hdr" "$body"; then
+      printf 'blocked|风控拦截'
+    else
+      printf 'fail|未解锁'
+    fi
+    return
+  fi
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://ani.gamer.com.tw/ajax/token.php?adID=89422&sn=37783&device=${dev_id}" -b "$ck"; then
+    unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+  fi
+  if jq -e '.animeSn != null' "$body" >/dev/null 2>&1 || grep -qi '"animeSn"' "$body" 2>/dev/null; then
+    printf 'ok|解锁 (TW)'
+  elif [ "$UNLOCK_HTTP_CODE" = "403" ]; then
+    printf 'blocked|风控拦截'
+  else
+    printf 'fail|未解锁'
+  fi
+}
+
+unlock_probe_bilibili(){
+  local mode=$1 pfx=$2
+  local hdr="${pfx}.hdr" body="${pfx}.body" z_cc="" z_loc="" c_hktw="" c_tw="" loc=""
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://api.bilibili.com/x/web-interface/zone"; then
+    unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+  fi
+  z_cc=$(jq -r '.data.country_code // empty' "$body" 2>/dev/null)
+  case "$z_cc" in
+    852) z_loc="HK" ;; 853) z_loc="MO" ;; 886) z_loc="TW" ;; 86) z_loc="CN" ;;
+    1) z_loc="US" ;; 81) z_loc="JP" ;; 65) z_loc="SG" ;; 82) z_loc="KR" ;;
+    44) z_loc="GB" ;; 49) z_loc="DE" ;;
+  esac
+  if unlock_curl_do "$mode" "$hdr" "$body" "https://api.bilibili.com/pgc/player/web/playurl?avid=82846771&qn=0&type=&otype=json&ep_id=307247&fourk=1&fnver=0&fnval=16&session=00000000000000000000000000000000&module=bangumi"; then
+    c_hktw=$(jq -r '.code // empty' "$body" 2>/dev/null)
+  fi
+  if unlock_curl_do "$mode" "$hdr" "$body" "https://api.bilibili.com/pgc/player/web/playurl?avid=50762638&qn=0&type=&otype=json&ep_id=285013&fourk=1&fnver=0&fnval=16&session=00000000000000000000000000000000&module=bangumi"; then
+    c_tw=$(jq -r '.code // empty' "$body" 2>/dev/null)
+  fi
+  if [ "$c_hktw" = "0" ] && [ "$c_tw" = "0" ]; then
+    case "$z_loc" in HK|MO|TW) loc="$z_loc" ;; *) loc="TW" ;; esac
+    printf 'ok|解锁 (%s)' "$loc"
+  elif [ "$c_hktw" = "0" ]; then
+    case "$z_loc" in HK|MO) loc="$z_loc" ;; *) loc="HK/MO" ;; esac
+    printf 'ok|解锁 (%s)' "$loc"
+  elif [ "$c_tw" = "0" ]; then
+    printf 'ok|解锁 (TW)'
+  else
+    printf 'fail|未解锁%s' "${z_loc:+ ($z_loc)}"
+  fi
+}
+
+unlock_probe_abema(){
+  local mode=$1 pfx=$2
+  local hdr="${pfx}.hdr" body="${pfx}.body" iso=""
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://api.abema.io/v1/ip/check?device=android" -L --max-redirs 2; then
+    unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+  fi
+  iso=$(jq -r '.isoCountryCode // empty' "$body" 2>/dev/null)
+  iso=$(unlock_sanitize_cc "$iso")
+  if [ "$UNLOCK_HTTP_CODE" = "200" ] && [ "$iso" = "JP" ]; then
+    printf 'ok|解锁 (JP)'
+  elif grep -qi 'anonymous_ip' "$body" 2>/dev/null; then
+    printf 'blocked|风控拦截'
+  else
+    printf 'fail|未解锁%s' "${iso:+ ($iso)}"
+  fi
+}
+
+unlock_probe_google_search(){
+  local mode=$1 pfx=$2
+  local hdr="${pfx}.hdr" body="${pfx}.body"
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://www.google.com/search?q=test" -L --max-redirs 3 -H "Cookie: $UNLOCK_GOOGLE_COOKIE"; then
+    unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+  fi
+  if [[ "$UNLOCK_EFF_URL" == *"/sorry/"* ]] || [ "$UNLOCK_HTTP_CODE" = "429" ] ||
+     grep -qiE 'Our systems have detected unusual traffic|g-recaptcha' "$body" 2>/dev/null; then
+    printf 'blocked|触发验证'
+  elif [ "$UNLOCK_HTTP_CODE" = "200" ]; then
+    printf 'ok|正常'
+  else
+    printf 'fail|异常(%s)' "$UNLOCK_HTTP_CODE"
+  fi
+}
+
+unlock_probe_youtube_cdn(){
+  local mode=$1 pfx=$2
+  local hdr="${pfx}.hdr" body="${pfx}.body" iata=""
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://redirector.googlevideo.com/report_mapping?di=no"; then
+    unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
+  fi
+  iata=$(grep -oE '=>[[:space:]]*[a-zA-Z]{3}[0-9]' "$body" 2>/dev/null | head -1 | sed -E 's/^=>[[:space:]]*([a-zA-Z]{3}).*/\1/')
+  [ -n "$iata" ] || iata=$(grep -oE '\.[a-zA-Z]{3}[0-9]{2}' "$body" 2>/dev/null | head -1 | sed -E 's/^\.([a-zA-Z]{3}).*/\1/')
+  iata=${iata^^}
+  if [[ "$iata" =~ ^[A-Z]{3}$ ]]; then
+    printf 'info|%s' "$iata"
+  else
+    printf 'info|未知'
+  fi
+}
+
+# 按终端可见列宽对齐输出（兼容 ASCII + 3 字节中文字符）
+unlock_display_width(){
+  local plain=$1 ascii bytes cjk
+  ascii=${plain//[^ -~]/}
+  bytes=${#plain}
+  cjk=$(( (bytes - ${#ascii}) / 3 ))
+  printf '%d' "$(( ${#ascii} + 2 * cjk ))"
+}
+
+unlock_pad_spaces(){
+  local plain=$1 target=$2 width pad
+  width=$(unlock_display_width "$plain")
+  pad=$((target - width))
+  [ "$pad" -lt 1 ] && pad=1
+  printf '%*s' "$pad" ''
+}
+
+unlock_color_of(){
+  case "$1" in
+    ok) printf '%s' "$GREEN" ;;
+    orig|partial|blocked) printf '%s' "$YELLOW" ;;
+    fail) printf '%s' "$RED" ;;
+    info) printf '%s' "$CYAN" ;;
+    *) printf '%s' "$DIM" ;;
+  esac
+}
+
+unlock_exit_summary(){
+  local exit_id label
+  exit_id=$(state_get exit 2>/dev/null || printf 'direct')
+  label=$(exit_label 2>/dev/null || printf '直连')
+  if [ "$exit_id" = "warp" ]; then
+    label="${label} ($(warp_mode_label))"
+  fi
+  if [ "$exit_id" != "direct" ] && ! systemctl is-active --quiet sing-box; then
+    label="${label} (服务未运行，实际走直连)"
+  fi
+  printf '%s' "$label"
+}
+
+unlock_render_ip_header(){
+  local exit_text=$1 info4=$2 info6=$3 ip country asn name
+  tell "当前出口: ${YELLOW}${exit_text}${PLAIN}"
+  if [ -n "$info4" ]; then
+    IFS=$'\t' read -r ip country asn name <<<"$info4"
+    tell "IPv4: ${GREEN}${ip}${PLAIN} | 地区: ${YELLOW}${country:-未知}${PLAIN} | ${CYAN}${name:-未知}${PLAIN}${asn:+ (${PURPLE}${asn}${PLAIN})}"
+  else
+    tell "IPv4: ${RED}无或不可用${PLAIN}"
+  fi
+  if [ -n "$info6" ]; then
+    IFS=$'\t' read -r ip country asn name <<<"$info6"
+    tell "IPv6: ${GREEN}${ip}${PLAIN} | 地区: ${YELLOW}${country:-未知}${PLAIN} | ${CYAN}${name:-未知}${PLAIN}${asn:+ (${PURPLE}${asn}${PLAIN})}"
+  else
+    tell "IPv6: ${RED}无或不可用${PLAIN}"
+  fi
+}
+
+unlock_run_and_render(){
+  local has_v4=$1 has_v6=$2
+  local -a groups=(
+    "AI 服务|ai"
+    "全球主流流媒体|global"
+    "热门区域流媒体|regional"
+    "Google 与路由|net"
+  )
+  local -a checks=(
+    "ai|chatgpt_web|ChatGPT Web|unlock_probe_chatgpt_web"
+    "ai|chatgpt_api|ChatGPT API/App|unlock_probe_chatgpt_api"
+    "ai|claude|Claude|unlock_probe_claude"
+    "ai|gemini|Google Gemini|unlock_probe_gemini"
+    "ai|grok|Grok|unlock_probe_grok"
+    "global|netflix|Netflix|unlock_probe_netflix"
+    "global|disney|Disney+|unlock_probe_disney"
+    "global|youtube|YouTube Premium|unlock_probe_youtube"
+    "global|tiktok|TikTok|unlock_probe_tiktok"
+    "global|spotify|Spotify|unlock_probe_spotify"
+    "regional|prime|Prime Video|unlock_probe_prime"
+    "regional|max|Max|unlock_probe_max"
+    "regional|bahamut|巴哈姆特动画疯|unlock_probe_bahamut"
+    "regional|bilibili|Bilibili 港澳台|unlock_probe_bilibili"
+    "regional|abema|AbemaTV|unlock_probe_abema"
+    "net|google|Google 搜索|unlock_probe_google_search"
+    "net|yt_cdn|YouTube CDN|unlock_probe_youtube_cdn"
+  )
+  (
+    local work_dir="" entry grp id label fn mode res st txt col line_out
+    local g_entry g_title g_id r4 r6 st4 txt4 st6 txt6 col4 col6 p4 p6
+    local -a pids=()
+    trap 'for p in "${pids[@]}"; do kill_tree "$p"; done; [ -n "$work_dir" ] && rm -rf -- "$work_dir"' EXIT
+    trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
+    work_dir=$(mktemp -d) || exit 1
+    for entry in "${checks[@]}"; do
+      IFS='|' read -r grp id label fn <<<"$entry"
+      for mode in 4 6; do
+        [ "$mode" = "4" ] && [ "$has_v4" != "1" ] && continue
+        [ "$mode" = "6" ] && [ "$has_v6" != "1" ] && continue
+        ( "$fn" "$mode" "$work_dir/${id}_${mode}" > "$work_dir/${id}_${mode}.res" 2>/dev/null ) &
+        pids+=("$!")
+      done
+    done
+    for p in "${pids[@]}"; do wait "$p" 2>/dev/null || true; done
+
+    for g_entry in "${groups[@]}"; do
+      IFS='|' read -r g_title g_id <<<"$g_entry"
+      printf '\n%b\n' "${BOLD}${CYAN}[${g_title}]${PLAIN}"
+      for entry in "${checks[@]}"; do
+        IFS='|' read -r grp id label fn <<<"$entry"
+        [ "$grp" = "$g_id" ] || continue
+        p4=$(unlock_pad_spaces "$label" 19)
+        line_out="  ${WHITE}${label}${PLAIN}${p4}"
+        if [ "$has_v4" = "1" ] && [ "$has_v6" = "1" ]; then
+          r4=$(cat "$work_dir/${id}_4.res" 2>/dev/null); [ -n "$r4" ] || r4="err|无结果"
+          r6=$(cat "$work_dir/${id}_6.res" 2>/dev/null); [ -n "$r6" ] || r6="err|无结果"
+          st4=${r4%%|*}; txt4=${r4#*|}; col4=$(unlock_color_of "$st4")
+          st6=${r6%%|*}; txt6=${r6#*|}; col6=$(unlock_color_of "$st6")
+          p6=$(unlock_pad_spaces "v4: ${txt4}" 22)
+          line_out+="${DIM}v4:${PLAIN} ${col4}${txt4}${PLAIN}${p6}${DIM}v6:${PLAIN} ${col6}${txt6}${PLAIN}"
+        else
+          mode="4"; [ "$has_v4" = "1" ] || mode="6"
+          res=$(cat "$work_dir/${id}_${mode}.res" 2>/dev/null); [ -n "$res" ] || res="err|无结果"
+          st=${res%%|*}; txt=${res#*|}; col=$(unlock_color_of "$st")
+          line_out+="${DIM}v${mode}:${PLAIN} ${col}${txt}${PLAIN}"
+        fi
+        printf '%b\n' "$line_out"
+      done
+    done
+  )
+}
+
+menu_unlock(){
+  local refresh=1 choice exit_text="" ip_pair info4="" info6="" has_v4=0 has_v6=0 report=""
+  while :; do
+    if [ "$refresh" = "1" ]; then
+      exit_text=$(unlock_exit_summary)
+      ui_title "解锁查询"
+      tell "当前出口: ${YELLOW}${exit_text}${PLAIN}"
+      tell ""
+      tell "${DIM}正在检测出口 IP 与双栈解锁状态...${PLAIN}"
+      ip_pair=$(fetch_client_ip_pair)
+      info4=$(sed -n '1p' <<<"$ip_pair")
+      info6=$(sed -n '2p' <<<"$ip_pair")
+      has_v4=0; has_v6=0
+      [ -n "$info4" ] && has_v4=1
+      [ -n "$info6" ] && has_v6=1
+      if [ "$has_v4" = "1" ] || [ "$has_v6" = "1" ]; then
+        report=$(unlock_run_and_render "$has_v4" "$has_v6")
+      else
+        report=""
+      fi
+      refresh=0
+    fi
+    ui_title "解锁查询"
+    unlock_render_ip_header "$exit_text" "$info4" "$info6"
+    if [ "$has_v4" = "1" ] || [ "$has_v6" = "1" ]; then
+      printf '%s\n' "$report"
+    else
+      tell ""
+      tell_warn "当前出口 IPv4 / IPv6 均不可达，无法进行解锁检测"
+    fi
+    tell ""
+    menu_item 1 "重新检测"
+    menu_item 0 "返回"
+    choice=$(prompt "请选择 (回车重测)")
+    case "$choice" in
+      ""|1) refresh=1 ;;
+      0) break ;;
+      *) tell_warn "输入无效，请重新选择"; sleep 1 ;;
+    esac
+  done
+}
+
 menu_status(){
   local os core arch mem up_secs up_days up_hours up_mins up sb_ver sb_asset s_state ip_block="" refresh=1 choice
   while :; do
@@ -933,14 +1656,16 @@ menu_status(){
     tell ""
     [ -n "$ip_block" ] && printf '%s\n' "$ip_block"
     tell ""
-    menu_item 1 "检测更新"
-    menu_item 2 "彻底卸载"
+    menu_item 1 "解锁查询"
+    menu_item 2 "检测更新"
+    menu_item 3 "彻底卸载"
     menu_item 0 "返回"
     choice=$(prompt "请选择 (回车刷新)")
     case "$choice" in
       "") refresh=1 ;;
-      1) run_update; refresh=1 ;;
-      2) run_uninstall ;;
+      1) menu_unlock; refresh=1 ;;
+      2) run_update; refresh=1 ;;
+      3) run_uninstall ;;
       0) break ;;
       *) tell_warn "输入无效，请重新选择"; sleep 1 ;;
     esac
@@ -4271,8 +4996,8 @@ warp_register(){
 warp_trace(){
   local family=$1 res ip loc colo warp
   case "$family" in
-    4) res=$(curl -4 -fsS --connect-timeout 5 --max-time 8 "$WARP_TRACE" 2>/dev/null) || return 1 ;;
-    6) res=$(curl -6 -fsS --connect-timeout 5 --max-time 8 "$WARP_TRACE" 2>/dev/null) || return 1 ;;
+    4) res=$(curl -4 --noproxy '*' -fsS --connect-timeout 5 --max-time 8 "$WARP_TRACE" 2>/dev/null) || return 1 ;;
+    6) res=$(curl -6 --noproxy '*' -fsS --connect-timeout 5 --max-time 8 "$WARP_TRACE" 2>/dev/null) || return 1 ;;
     *) return 2 ;;
   esac
   res=${res//$'\r'/}
@@ -5715,7 +6440,7 @@ exit_label(){
 get_ip_info(){
   local mode=$1 res ip country asn name org w
   case "$mode" in 4|6) ;; *) return 2 ;; esac
-  res=$(curl -sS -"$mode" --connect-timeout 3 -m 4 https://ipwho.is/ 2>/dev/null) || res=""
+  res=$(curl -sS --noproxy '*' -"$mode" --connect-timeout 3 -m 4 https://ipwho.is/ 2>/dev/null) || res=""
   ip=$(jq -r 'select(.success != false) | .ip // empty' <<<"$res" 2>/dev/null)
   if [ -n "$ip" ]; then
     country=$(jq -r '.country // empty' <<<"$res" 2>/dev/null)
@@ -5723,7 +6448,7 @@ get_ip_info(){
     name=$(jq -r '.connection.org // empty' <<<"$res" 2>/dev/null)
     printf '%s\t%s\t%s\t%s\n' "$ip" "$country" "$asn" "$name"; return 0
   fi
-  res=$(curl -sS -"$mode" --connect-timeout 3 -m 4 https://api.ip.sb/geoip 2>/dev/null) || res=""
+  res=$(curl -sS --noproxy '*' -"$mode" --connect-timeout 3 -m 4 https://api.ip.sb/geoip 2>/dev/null) || res=""
   ip=$(jq -r '.ip // empty' <<<"$res" 2>/dev/null)
   if [ -n "$ip" ]; then
     country=$(jq -r '.country // empty' <<<"$res" 2>/dev/null)
@@ -5731,7 +6456,7 @@ get_ip_info(){
     name=$(jq -r '.organization // .isp // empty' <<<"$res" 2>/dev/null)
     printf '%s\t%s\t%s\t%s\n' "$ip" "$country" "$asn" "$name"; return 0
   fi
-  res=$(curl -sS -"$mode" --connect-timeout 3 -m 4 https://ipinfo.io/json 2>/dev/null) || res=""
+  res=$(curl -sS --noproxy '*' -"$mode" --connect-timeout 3 -m 4 https://ipinfo.io/json 2>/dev/null) || res=""
   ip=$(jq -r '.ip // empty' <<<"$res" 2>/dev/null)
   if [ -n "$ip" ]; then
     country=$(jq -r '.country // empty' <<<"$res" 2>/dev/null)
@@ -5747,28 +6472,34 @@ get_ip_info(){
   printf '%s\t%s\t%s\t%s\n' "$ip" "$country" "$asn" "$name"
 }
 
-render_client_ip_status(){
+fetch_client_ip_pair(){
   (
-    local info4 info6 ip country asn name tmp4="" tmp6="" p4="" p6=""
+    local tmp4="" tmp6="" p4="" p6=""
     trap 'kill_tree "$p4"; kill_tree "$p6"; rm -f "$tmp4" "$tmp6"' EXIT
     trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
     tmp4=$(mktemp) || exit 1; tmp6=$(mktemp) || exit 1
     get_ip_info 4 >"$tmp4" 2>/dev/null & p4=$!
     get_ip_info 6 >"$tmp6" 2>/dev/null & p6=$!
     wait "$p4" "$p6" 2>/dev/null || true
-    info4=$(cat "$tmp4" 2>/dev/null)
-    info6=$(cat "$tmp6" 2>/dev/null)
-    if [ -n "$info4" ]; then
-      IFS=$'\t' read -r ip country asn name <<<"$info4"
-      tell "IPv4: ${GREEN}${ip}${PLAIN} | 地区: ${YELLOW}${country}${PLAIN}"
-      tell "所属: ${CYAN}${name}${PLAIN} | ASN: ${PURPLE}${asn}${PLAIN}"
-    else tell "IPv4: ${RED}无或不可用${PLAIN}"; fi
-    if [ -n "$info6" ]; then
-      IFS=$'\t' read -r ip country asn name <<<"$info6"
-      tell "IPv6: ${GREEN}${ip}${PLAIN} | 地区: ${YELLOW}${country}${PLAIN}"
-      tell "所属: ${CYAN}${name}${PLAIN} | ASN: ${PURPLE}${asn}${PLAIN}"
-    else tell "IPv6: ${RED}无或不可用${PLAIN}"; fi
+    printf '%s\n%s\n' "$(cat "$tmp4" 2>/dev/null)" "$(cat "$tmp6" 2>/dev/null)"
   )
+}
+
+render_client_ip_status(){
+  local pair info4 info6 ip country asn name
+  pair=$(fetch_client_ip_pair)
+  info4=$(sed -n '1p' <<<"$pair")
+  info6=$(sed -n '2p' <<<"$pair")
+  if [ -n "$info4" ]; then
+    IFS=$'\t' read -r ip country asn name <<<"$info4"
+    tell "IPv4: ${GREEN}${ip}${PLAIN} | 地区: ${YELLOW}${country}${PLAIN}"
+    tell "所属: ${CYAN}${name}${PLAIN} | ASN: ${PURPLE}${asn}${PLAIN}"
+  else tell "IPv4: ${RED}无或不可用${PLAIN}"; fi
+  if [ -n "$info6" ]; then
+    IFS=$'\t' read -r ip country asn name <<<"$info6"
+    tell "IPv6: ${GREEN}${ip}${PLAIN} | 地区: ${YELLOW}${country}${PLAIN}"
+    tell "所属: ${CYAN}${name}${PLAIN} | ASN: ${PURPLE}${asn}${PLAIN}"
+  else tell "IPv6: ${RED}无或不可用${PLAIN}"; fi
 }
 
 menu_client_status(){

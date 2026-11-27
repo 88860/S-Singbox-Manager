@@ -7,7 +7,7 @@
 **纯 Bash 单文件 · 全功能 sing-box 交互式运维管理器**
 
 
-[![Version](https://img.shields.io/badge/Version-v26.11.15-00b894?style=flat-square)](https://github.com/88860/S-Singbox-Manager)
+[![Version](https://img.shields.io/badge/Version-v26.11.27-00b894?style=flat-square)](https://github.com/88860/S-Singbox-Manager)
 [![Shell](https://img.shields.io/badge/Shell-Bash-4eaa25?style=flat-square&logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![Core](https://img.shields.io/badge/Core-sing--box-0984e3?style=flat-square)](https://github.com/SagerNet/sing-box)
 [![OS](https://img.shields.io/badge/OS-Debian%20%7C%20Ubuntu-e84393?style=flat-square&logo=debian&logoColor=white)](#快速开始)
@@ -61,7 +61,7 @@ curl -fsSL https://raw.githubusercontent.com/88860/S-Singbox-Manager/main/s.sh -
 | 命令 | 说明 |
 | :--- | :--- |
 | `s` | 唤起交互式主菜单 |
-| `s -v` / `s --version` | 查看当前脚本版本（如 `s v26.11.15`） |
+| `s -v` / `s --version` | 查看当前脚本版本（如 `s v26.11.27`） |
 
 
 ---
@@ -170,7 +170,7 @@ flowchart LR
 
 
 ```text
-s 管理器 v26.11.15
+s 管理器 v26.11.27
 ├── 1. 服务端管理
 │   ├── 1. 创建协议 (VLESS / Trojan / Hysteria2 / TUIC / Shadowsocks / VMess / AnyTLS / SOCKS5 / Snell)
 │   ├── 2. 删除协议 (无 ACME 节点时可联动清理域名与证书)
@@ -197,8 +197,9 @@ s 管理器 v26.11.15
 │   ├── 3. 启用/停用 WARP
 │   └── 4. 删除配置 (同步远程注销)
 └── 5. 状态与更新
-    ├── 1. 检测更新 (sing-box 内核 + s.sh 脚本)
-    └── 2. 彻底卸载 (清理服务、规则、配置及按需卸载 apt 依赖)
+    ├── 1. 解锁查询 (双栈并发检测 AI / 流媒体 / 区域与出口路由)
+    ├── 2. 检测更新 (sing-box 内核 + s.sh 脚本)
+    └── 3. 彻底卸载 (清理服务、规则、配置及按需卸载 apt 依赖)
 ```
 
 
@@ -254,4 +255,4 @@ systemctl restart systemd-journald
 
 
 > [!TIP]
-> 如需彻底移除本工具及其全部配置，进入菜单选择 **`5. 状态与更新` → `2. 彻底卸载`** 即可自动停止服务、清理 `nftables` 端口跳跃表、移除配置目录，并按需卸载脚本安装过的系统依赖包。
+> 如需彻底移除本工具及其全部配置，进入菜单选择 **`5. 状态与更新` → `3. 彻底卸载`** 即可自动停止服务、清理 `nftables` 端口跳跃表、移除配置目录，并按需卸载脚本安装过的系统依赖包。
