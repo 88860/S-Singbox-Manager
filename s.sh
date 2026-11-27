@@ -791,20 +791,23 @@ run_update(){
   ui_clear
   tell "正在检测 sing-box 内核更新..."
   current=$(core_version); latest=$(remote_version)
-  tell "本地版本: ${current:-未知}"; tell "目标版本: ${latest:-获取失败}"
+  local cur_txt="${RED}未知${PLAIN}" lat_txt="${RED}获取失败${PLAIN}"
+  [ -n "$current" ] && cur_txt="${GREEN}${current}${PLAIN}"
+  [ -n "$latest" ] && lat_txt="${GREEN}${latest}${PLAIN}"
+  tell "本地版本: ${cur_txt}"; tell "目标版本: ${lat_txt}"
   if [ -z "$latest" ]; then tell_warn "无法获取最新版本，请检查网络或 GitHub 访问"
   elif [ -z "$current" ]; then
-    if prompt_yes "无法读取当前内核版本，是否重新下载并安装 sing-box v$latest"; then
+    if prompt_yes "无法读取当前内核版本，是否重新下载并安装 sing-box ${GREEN}v${latest}${PLAIN}${BOLD}${YELLOW}"; then
       run_core_reinstall "内核重新安装完成" "内核已下载，但配置应用失败" "内核重新安装失败"
     fi
   elif [ "$current" != "$latest" ]; then
-    if prompt_yes "发现新版本 v$latest，是否立即更新"; then
+    if prompt_yes "发现新版本 ${GREEN}v${latest}${PLAIN}${BOLD}${YELLOW}，是否立即更新"; then
       run_core_reinstall "内核更新完成" "内核更新完成，但配置应用失败" "内核更新失败"
     fi
   else tell_ok "内核已是最新版本"; fi
   printf "\n"
   tell "正在检测 s 脚本更新..."
-  tell "当前脚本版本: v${SCRIPT_VERSION}"
+  tell "当前脚本版本: ${GREEN}v${SCRIPT_VERSION}${PLAIN}"
   [ -f "$SELF" ] && [ -w "$(dirname "$SELF")" ] || { tell_warn "当前脚本路径不可写，无法自更新"; wait_key; return; }
   local ref_api="https://api.github.com/repos/88860/S-Singbox-Manager/git/ref/heads/main"
   local file_api
@@ -896,20 +899,29 @@ UNLOCK_GOOGLE_COOKIE='CONSENT=YES+cb.20210328-17-p0.en+FX+999; SOCS=CAESHAgBEhJn
 # 执行基于当前出口路由的 HTTP 探测（禁用代理环境变量与网卡绑定，确保始终走当前出口 IP）
 unlock_curl_do(){
   local mode=$1 hdr=$2 body=$3 url=$4; shift 4
-  local meta="" rc=0
-  : >"$hdr"; : >"$body"
-  UNLOCK_CURL_RC=0
-  UNLOCK_HTTP_CODE="000"
-  UNLOCK_EFF_URL=""
-  meta=$(curl -"$mode" --noproxy '*' -sS --connect-timeout 3 --max-time 6 \
-    -A "$UNLOCK_UA" -H "Accept-Language: en-US,en;q=0.9" \
-    -D "$hdr" -o "$body" -w '%{http_code}\t%{url_effective}' "$@" "$url" 2>/dev/null) || rc=$?
-  UNLOCK_CURL_RC=$rc
-  if [ -n "$meta" ]; then
-    UNLOCK_HTTP_CODE=${meta%%$'\t'*}
-    UNLOCK_EFF_URL=${meta#*$'\t'}
-  fi
-  [ "$rc" -eq 0 ] && [ "$UNLOCK_HTTP_CODE" != "000" ]
+  local meta="" rc=0 attempt=0
+  while :; do
+    : >"$hdr"; : >"$body"
+    rc=0; meta=""
+    UNLOCK_CURL_RC=0
+    UNLOCK_HTTP_CODE="000"
+    UNLOCK_EFF_URL=""
+    meta=$(curl -"$mode" --noproxy '*' -sS --connect-timeout 3 --max-time 6 \
+      -A "$UNLOCK_UA" -H "Accept-Language: en-US,en;q=0.9" \
+      -D "$hdr" -o "$body" -w '%{http_code}\t%{url_effective}' "$@" "$url" 2>/dev/null) || rc=$?
+    UNLOCK_CURL_RC=$rc
+    if [ -n "$meta" ]; then
+      UNLOCK_HTTP_CODE=${meta%%$'\t'*}
+      UNLOCK_EFF_URL=${meta#*$'\t'}
+    fi
+    [ "$rc" -eq 0 ] && [ "$UNLOCK_HTTP_CODE" != "000" ] && return 0
+    case "$rc" in
+      16|35|52|55|56|92)
+        [ "$attempt" -lt 1 ] || return 1
+        attempt=$((attempt + 1)) ;;
+      *) return 1 ;;
+    esac
+  done
 }
 
 unlock_curl_err_result(){
@@ -1412,13 +1424,34 @@ unlock_probe_abema(){
 
 unlock_probe_google_search(){
   local mode=$1 pfx=$2
-  local hdr="${pfx}.hdr" body="${pfx}.body"
-  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://www.google.com/search?q=test" -L --max-redirs 3 -H "Cookie: $UNLOCK_GOOGLE_COOKIE"; then
+  local hdr="${pfx}.hdr" body="${pfx}.body" loc_hdr=""
+  if ! unlock_curl_do "$mode" "$hdr" "$body" "https://www.google.com/search?q=test" -H "Cookie: $UNLOCK_GOOGLE_COOKIE"; then
     unlock_curl_err_result "$mode" "$UNLOCK_CURL_RC"; return
   fi
-  if [[ "$UNLOCK_EFF_URL" == *"/sorry/"* ]] || [ "$UNLOCK_HTTP_CODE" = "429" ] ||
+  loc_hdr=$(awk 'BEGIN{IGNORECASE=1} /^location:/{print $2; exit}' "$hdr" 2>/dev/null | tr -d '\r')
+  if [ "$UNLOCK_HTTP_CODE" = "429" ] || [[ "$loc_hdr" == *"/sorry/"* ]] ||
      grep -qiE 'Our systems have detected unusual traffic|g-recaptcha' "$body" 2>/dev/null; then
     printf 'blocked|触发验证'
+  elif [[ "$UNLOCK_HTTP_CODE" =~ ^30[1278]$ ]]; then
+    if [[ "$loc_hdr" == *"/httpservice/retry/enablejs"* ]]; then
+      printf 'ok|正常'
+    else
+      local next_url="$loc_hdr"
+      [[ "$next_url" == /* ]] && next_url="https://www.google.com${next_url}"
+      if [ -n "$next_url" ] && unlock_curl_do "$mode" "$hdr" "$body" "$next_url" -H "Cookie: $UNLOCK_GOOGLE_COOKIE"; then
+        loc_hdr=$(awk 'BEGIN{IGNORECASE=1} /^location:/{print $2; exit}' "$hdr" 2>/dev/null | tr -d '\r')
+        if [ "$UNLOCK_HTTP_CODE" = "429" ] || [[ "$loc_hdr" == *"/sorry/"* ]] ||
+           grep -qiE 'Our systems have detected unusual traffic|g-recaptcha' "$body" 2>/dev/null; then
+          printf 'blocked|触发验证'
+        elif [ "$UNLOCK_HTTP_CODE" = "200" ] || [[ "$loc_hdr" == *"/httpservice/retry/enablejs"* ]]; then
+          printf 'ok|正常'
+        else
+          printf 'fail|异常(%s)' "$UNLOCK_HTTP_CODE"
+        fi
+      else
+        printf 'ok|正常'
+      fi
+    fi
   elif [ "$UNLOCK_HTTP_CODE" = "200" ]; then
     printf 'ok|正常'
   else
@@ -1469,6 +1502,17 @@ unlock_color_of(){
   esac
 }
 
+unlock_symbol_of(){
+  case "$1" in
+    ok) printf '✓' ;;
+    orig|partial) printf '~' ;;
+    blocked) printf '!' ;;
+    fail) printf '✗' ;;
+    info) printf '•' ;;
+    *) printf '-' ;;
+  esac
+}
+
 unlock_exit_summary(){
   local exit_id label
   exit_id=$(state_get exit 2>/dev/null || printf 'direct')
@@ -1482,21 +1526,33 @@ unlock_exit_summary(){
   printf '%s' "$label"
 }
 
-unlock_render_ip_header(){
-  local exit_text=$1 info4=$2 info6=$3 ip country asn name
-  tell "当前出口: ${YELLOW}${exit_text}${PLAIN}"
-  if [ -n "$info4" ]; then
-    IFS=$'\t' read -r ip country asn name <<<"$info4"
-    tell "IPv4: ${GREEN}${ip}${PLAIN} | 地区: ${YELLOW}${country:-未知}${PLAIN} | ${CYAN}${name:-未知}${PLAIN}${asn:+ (${PURPLE}${asn}${PLAIN})}"
+unlock_probe_stacks(){
+  (
+    local p4="" p6="" t4="" t6="" ok4=0 ok6=0
+    trap 'kill_tree "$p4"; kill_tree "$p6"; rm -f "$t4" "$t6"' EXIT
+    trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
+    t4=$(mktemp) || exit 1; t6=$(mktemp) || exit 1
+    { { warp_trace 4 >/dev/null 2>&1 || get_ip_info 4 >/dev/null 2>&1; } && printf '1' >"$t4"; } & p4=$!
+    { { warp_trace 6 >/dev/null 2>&1 || get_ip_info 6 >/dev/null 2>&1; } && printf '1' >"$t6"; } & p6=$!
+    wait "$p4" "$p6" 2>/dev/null || true
+    [ "$(cat "$t4" 2>/dev/null)" = "1" ] && ok4=1
+    [ "$(cat "$t6" 2>/dev/null)" = "1" ] && ok6=1
+    printf '%s %s\n' "$ok4" "$ok6"
+  )
+}
+
+unlock_render_header(){
+  local exit_text=$1 has_v4=$2 has_v6=$3 stack_txt=""
+  if [ "$has_v4" = "1" ] && [ "$has_v6" = "1" ]; then
+    stack_txt="${GREEN}IPv4 + IPv6${PLAIN}"
+  elif [ "$has_v4" = "1" ]; then
+    stack_txt="${GREEN}仅 IPv4${PLAIN}"
+  elif [ "$has_v6" = "1" ]; then
+    stack_txt="${GREEN}仅 IPv6${PLAIN}"
   else
-    tell "IPv4: ${RED}无或不可用${PLAIN}"
+    stack_txt="${RED}均不可达${PLAIN}"
   fi
-  if [ -n "$info6" ]; then
-    IFS=$'\t' read -r ip country asn name <<<"$info6"
-    tell "IPv6: ${GREEN}${ip}${PLAIN} | 地区: ${YELLOW}${country:-未知}${PLAIN} | ${CYAN}${name:-未知}${PLAIN}${asn:+ (${PURPLE}${asn}${PLAIN})}"
-  else
-    tell "IPv6: ${RED}无或不可用${PLAIN}"
-  fi
+  tell "出口类型: ${YELLOW}${exit_text}${PLAIN}  |  探测栈: ${stack_txt}"
 }
 
 unlock_run_and_render(){
@@ -1527,8 +1583,8 @@ unlock_run_and_render(){
     "net|yt_cdn|YouTube CDN|unlock_probe_youtube_cdn"
   )
   (
-    local work_dir="" entry grp id label fn mode res st txt col line_out
-    local g_entry g_title g_id r4 r6 st4 txt4 st6 txt6 col4 col6 p4 p6
+    local work_dir="" entry grp id label fn mode res st txt col sym res_line
+    local g_entry g_title g_id r4 r6 st4 txt4 st6 txt6 col4 col6 sym4 sym6 p6
     local -a pids=()
     trap 'for p in "${pids[@]}"; do kill_tree "$p"; done; [ -n "$work_dir" ] && rm -rf -- "$work_dir"' EXIT
     trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
@@ -1540,52 +1596,53 @@ unlock_run_and_render(){
         [ "$mode" = "6" ] && [ "$has_v6" != "1" ] && continue
         ( "$fn" "$mode" "$work_dir/${id}_${mode}" > "$work_dir/${id}_${mode}.res" 2>/dev/null ) &
         pids+=("$!")
+        if [ "${#pids[@]}" -ge 10 ]; then
+          for p in "${pids[@]}"; do wait "$p" 2>/dev/null || true; done
+          pids=()
+        fi
       done
     done
     for p in "${pids[@]}"; do wait "$p" 2>/dev/null || true; done
+    pids=()
 
     for g_entry in "${groups[@]}"; do
       IFS='|' read -r g_title g_id <<<"$g_entry"
-      printf '\n%b\n' "${BOLD}${CYAN}[${g_title}]${PLAIN}"
+      printf '\n%b\n' "${BOLD}${CYAN}[ ${g_title} ]${PLAIN}"
       for entry in "${checks[@]}"; do
         IFS='|' read -r grp id label fn <<<"$entry"
         [ "$grp" = "$g_id" ] || continue
-        p4=$(unlock_pad_spaces "$label" 19)
-        line_out="  ${WHITE}${label}${PLAIN}${p4}"
+        printf '%b\n' "  ${BOLD}${WHITE}${label}${PLAIN}"
         if [ "$has_v4" = "1" ] && [ "$has_v6" = "1" ]; then
           r4=$(cat "$work_dir/${id}_4.res" 2>/dev/null); [ -n "$r4" ] || r4="err|无结果"
           r6=$(cat "$work_dir/${id}_6.res" 2>/dev/null); [ -n "$r6" ] || r6="err|无结果"
-          st4=${r4%%|*}; txt4=${r4#*|}; col4=$(unlock_color_of "$st4")
-          st6=${r6%%|*}; txt6=${r6#*|}; col6=$(unlock_color_of "$st6")
-          p6=$(unlock_pad_spaces "v4: ${txt4}" 22)
-          line_out+="${DIM}v4:${PLAIN} ${col4}${txt4}${PLAIN}${p6}${DIM}v6:${PLAIN} ${col6}${txt6}${PLAIN}"
+          st4=${r4%%|*}; txt4=${r4#*|}; col4=$(unlock_color_of "$st4"); sym4=$(unlock_symbol_of "$st4")
+          st6=${r6%%|*}; txt6=${r6#*|}; col6=$(unlock_color_of "$st6"); sym6=$(unlock_symbol_of "$st6")
+          p6=$(unlock_pad_spaces "$txt4" 18)
+          res_line="    ${DIM}IPv4:${PLAIN} ${col4}${sym4} ${txt4}${PLAIN}${p6}${DIM}IPv6:${PLAIN} ${col6}${sym6} ${txt6}${PLAIN}"
         else
           mode="4"; [ "$has_v4" = "1" ] || mode="6"
           res=$(cat "$work_dir/${id}_${mode}.res" 2>/dev/null); [ -n "$res" ] || res="err|无结果"
-          st=${res%%|*}; txt=${res#*|}; col=$(unlock_color_of "$st")
-          line_out+="${DIM}v${mode}:${PLAIN} ${col}${txt}${PLAIN}"
+          st=${res%%|*}; txt=${res#*|}; col=$(unlock_color_of "$st"); sym=$(unlock_symbol_of "$st")
+          res_line="    ${DIM}IPv${mode}:${PLAIN} ${col}${sym} ${txt}${PLAIN}"
         fi
-        printf '%b\n' "$line_out"
+        printf '%b\n' "$res_line"
       done
     done
   )
 }
 
 menu_unlock(){
-  local refresh=1 choice exit_text="" ip_pair info4="" info6="" has_v4=0 has_v6=0 report=""
+  local refresh=1 choice exit_text="" stacks="" has_v4=0 has_v6=0 report=""
   while :; do
     if [ "$refresh" = "1" ]; then
       exit_text=$(unlock_exit_summary)
       ui_title "解锁查询"
-      tell "当前出口: ${YELLOW}${exit_text}${PLAIN}"
+      tell "出口类型: ${YELLOW}${exit_text}${PLAIN}"
       tell ""
-      tell "${DIM}正在检测出口 IP 与双栈解锁状态...${PLAIN}"
-      ip_pair=$(fetch_client_ip_pair)
-      info4=$(sed -n '1p' <<<"$ip_pair")
-      info6=$(sed -n '2p' <<<"$ip_pair")
-      has_v4=0; has_v6=0
-      [ -n "$info4" ] && has_v4=1
-      [ -n "$info6" ] && has_v6=1
+      tell "${DIM}正在检测当前出口解锁状态...${PLAIN}"
+      stacks=$(unlock_probe_stacks)
+      read -r has_v4 has_v6 <<<"$stacks"
+      has_v4=${has_v4:-0}; has_v6=${has_v6:-0}
       if [ "$has_v4" = "1" ] || [ "$has_v6" = "1" ]; then
         report=$(unlock_run_and_render "$has_v4" "$has_v6")
       else
@@ -1594,7 +1651,7 @@ menu_unlock(){
       refresh=0
     fi
     ui_title "解锁查询"
-    unlock_render_ip_header "$exit_text" "$info4" "$info6"
+    unlock_render_header "$exit_text" "$has_v4" "$has_v6"
     if [ "$has_v4" = "1" ] || [ "$has_v6" = "1" ]; then
       printf '%s\n' "$report"
     else
@@ -1614,7 +1671,7 @@ menu_unlock(){
 }
 
 menu_status(){
-  local os core arch mem up_secs up_days up_hours up_mins up sb_ver sb_asset s_state ip_block="" refresh=1 choice
+  local os core arch mem up_secs up_days up_hours up_mins up sb_ver sb_ver_txt sb_asset s_state ip_block="" refresh=1 choice
   while :; do
     if [ "$refresh" = 1 ]; then
       os=$(sed -n 's/^PRETTY_NAME="\(.*\)"/\1/p' /etc/os-release)
@@ -1630,6 +1687,8 @@ menu_status(){
       [ -z "$up" ] && up="不足1分钟"
       sb_ver=$(core_version)
       sb_asset=$(state_get asset)
+      sb_ver_txt="${RED}无${PLAIN}"
+      [ -n "$sb_ver" ] && sb_ver_txt="${GREEN}${sb_ver}${PLAIN}"
       s_state="${RED}未运行${PLAIN}"
       systemctl is-active --quiet sing-box && s_state="${GREEN}正常运行${PLAIN}"
       ui_title "状态与更新"
@@ -1638,8 +1697,8 @@ menu_status(){
       tell "内存状态: ${mem}"
       tell "运行时间: ${up}"
       tell "sing-box: ${s_state}"
-      tell "sing-box 版本: ${sb_ver:-无} (${sb_asset:-未知})"
-      tell "脚本版本: v${SCRIPT_VERSION}"
+      tell "sing-box 版本: ${sb_ver_txt} (${sb_asset:-未知})"
+      tell "脚本版本: ${GREEN}v${SCRIPT_VERSION}${PLAIN}"
       tell ""
       tell "${DIM}正在检测出口 IP...${PLAIN}"
       ip_block=$(render_client_ip_status)
@@ -1651,8 +1710,8 @@ menu_status(){
     tell "内存状态: ${mem}"
     tell "运行时间: ${up}"
     tell "sing-box: ${s_state}"
-    tell "sing-box 版本: ${sb_ver:-无} (${sb_asset:-未知})"
-    tell "脚本版本: v${SCRIPT_VERSION}"
+    tell "sing-box 版本: ${sb_ver_txt} (${sb_asset:-未知})"
+    tell "脚本版本: ${GREEN}v${SCRIPT_VERSION}${PLAIN}"
     tell ""
     [ -n "$ip_block" ] && printf '%s\n' "$ip_block"
     tell ""
@@ -6599,7 +6658,7 @@ bootstrap(){
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   case $1 in
     -v|--version)
-      echo "s v${SCRIPT_VERSION}"
+      echo -e "s ${GREEN}v${SCRIPT_VERSION}${PLAIN}"
       exit 0 ;;
   esac
 
