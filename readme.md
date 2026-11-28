@@ -7,14 +7,14 @@
 **纯 Bash 单文件 · 全功能 sing-box 交互式运维管理器**
 
 
-[](https://github.com/88860/S-Singbox-Manager)
-[](https://www.gnu.org/software/bash/)
-[](https://github.com/SagerNet/sing-box)
-[](#快速开始)
-[](#架构与安全亮点)
+[![Version](https://img.shields.io/badge/Version-v26.11.28-00b894?style=flat-square)](https://github.com/88860/S-Singbox-Manager)
+[![Shell](https://img.shields.io/badge/Shell-Bash-4eaa25?style=flat-square&logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
+[![Core](https://img.shields.io/badge/Core-sing--box-0984e3?style=flat-square)](https://github.com/SagerNet/sing-box)
+[![OS](https://img.shields.io/badge/OS-Debian%20%7C%20Ubuntu-e84393?style=flat-square&logo=debian&logoColor=white)](#快速开始)
+[![Network](https://img.shields.io/badge/Network-IPv4%20%2F%20IPv6%20Dual--Stack-6c5ce7?style=flat-square)](#架构与安全亮点)
 
 
-**简体中文** | [English](README_EN.md)
+**简体中文** | [English](readme_en.md)
 
 
 [快速开始](#快速开始) · [核心功能](#核心功能) · [协议支持矩阵](#协议支持矩阵) · [架构与安全亮点](#架构与安全亮点) · [目录与运维](#目录与运维)

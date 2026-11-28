@@ -7,14 +7,14 @@
 **Pure Bash Single-File · Full-Featured Interactive sing-box Manager**
 
 
-[](https://github.com/88860/S-Singbox-Manager)
-[](https://www.gnu.org/software/bash/)
-[](https://github.com/SagerNet/sing-box)
-[](#quick-start)
-[](#architecture--security-highlights)
+[![Version](https://img.shields.io/badge/Version-v26.11.28-00b894?style=flat-square)](https://github.com/88860/S-Singbox-Manager)
+[![Shell](https://img.shields.io/badge/Shell-Bash-4eaa25?style=flat-square&logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
+[![Core](https://img.shields.io/badge/Core-sing--box-0984e3?style=flat-square)](https://github.com/SagerNet/sing-box)
+[![OS](https://img.shields.io/badge/OS-Debian%20%7C%20Ubuntu-e84393?style=flat-square&logo=debian&logoColor=white)](#quick-start)
+[![Network](https://img.shields.io/badge/Network-IPv4%20%2F%20IPv6%20Dual--Stack-6c5ce7?style=flat-square)](#architecture--security-highlights)
 
 
-[简体中文](README.md) | **English**
+[简体中文](readme.md) | **English**
 
 
 [Quick Start](#quick-start) · [Core Features](#core-features) · [Protocol Matrix](#protocol-matrix) · [Architecture & Security](#architecture--security-highlights) · [Operations & Layout](#operations--layout)
