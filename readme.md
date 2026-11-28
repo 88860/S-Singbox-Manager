@@ -1,4 +1,4 @@
-&lt;div align=&quot;center&quot;&gt;
+<div align="center">
 
 
 # S-Singbox-Manager
@@ -20,7 +20,7 @@
 [快速开始](#快速开始) · [核心功能](#核心功能) · [协议支持矩阵](#协议支持矩阵) · [架构与安全亮点](#架构与安全亮点) · [目录与运维](#目录与运维)
 
 
-&lt;/div&gt;
+</div>
 
 
 ---

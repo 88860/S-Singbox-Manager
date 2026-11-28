@@ -1,4 +1,4 @@
-&lt;div align=&quot;center&quot;&gt;
+<div align="center">
 
 
 # S-Singbox-Manager
@@ -20,7 +20,7 @@
 [Quick Start](#quick-start) · [Core Features](#core-features) · [Protocol Matrix](#protocol-matrix) · [Architecture & Security](#architecture--security-highlights) · [Operations & Layout](#operations--layout)
 
 
-&lt;/div&gt;
+</div>
 
 
 ---
