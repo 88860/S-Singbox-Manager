@@ -127,9 +127,9 @@ flowchart LR
 
 
     subgraph Core["sing-box 核心引擎"]
-        IN["服务端多协议入站<br/>(VLESS / Hy2 / TUIC / SS ...)"]
-        TUN["TUN 透明接管 (sbmtun)<br/>自动绕过 SSH 与本机地址"]
-        R{"路由决策<br/>物理栈 / 出口栈解耦"}
+        IN["服务端入站<br/>(VLESS / Hy2 / TUIC / SS)"]
+        TUN["TUN 接管 (sbmtun)<br/>自动绕过 SSH"]
+        R{"路由决策<br/>物理栈 / 出口栈"}
         IN --> R
         TUN --> R
         DNS -.-> R
@@ -165,8 +165,8 @@ flowchart LR
 ## 目录与运维
 
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;展开查看：完整交互菜单结构&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>展开查看：完整交互菜单结构</b></summary>
 
 
 ```text
@@ -203,11 +203,11 @@ s 管理器 v26.11.28
 ```
 
 
-&lt;/details&gt;
+</details>
 
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;展开查看：核心文件与目录布局&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>展开查看：核心文件与目录布局</b></summary>
 
 
 | 路径 | 作用 |
@@ -226,11 +226,11 @@ s 管理器 v26.11.28
 | `/etc/systemd/system/sing-box.service` | systemd 主服务单元（含 Drop-in 钩子） |
 
 
-&lt;/details&gt;
+</details>
 
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;展开查看：日志查看与 journald 空间限额优化&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>展开查看：日志查看与 journald 空间限额优化</b></summary>
 
 
 查看 `sing-box` 实时运行日志：
@@ -251,7 +251,7 @@ systemctl restart systemd-journald
 ```
 
 
-&lt;/details&gt;
+</details>
 
 
 > [!TIP]

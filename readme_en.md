@@ -125,9 +125,9 @@ flowchart LR
 
 
     subgraph Core["sing-box Engine"]
-        IN["Multi-Protocol Inbounds<br/>(VLESS / Hy2 / TUIC / SS ...)"]
-        TUN["TUN Takeover (sbmtun)<br/>Auto-Bypass SSH & Local IPs"]
-        R{"Routing Decision<br/>Physical / Exit Stack Decoupled"}
+        IN["Inbounds<br/>(VLESS / Hy2 / TUIC / SS)"]
+        TUN["TUN Takeover (sbmtun)<br/>Bypass SSH"]
+        R{"Routing<br/>Physical / Exit Stack"}
         IN --> R
         TUN --> R
         DNS -.-> R
@@ -163,8 +163,8 @@ flowchart LR
 ## Operations & Layout
 
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;Expand: Full Interactive Menu Structure&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>Expand: Full Interactive Menu Structure</b></summary>
 
 
 ```text
@@ -201,11 +201,11 @@ s Manager v26.11.28
 ```
 
 
-&lt;/details&gt;
+</details>
 
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;Expand: Core Files &amp; Directory Layout&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>Expand: Core Files &amp; Directory Layout</b></summary>
 
 
 | Path | Purpose |
@@ -224,11 +224,11 @@ s Manager v26.11.28
 | `/etc/systemd/system/sing-box.service` | systemd service unit (with Drop-in hooks) |
 
 
-&lt;/details&gt;
+</details>
 
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;Expand: Viewing Logs &amp; Tuning journald Limits&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>Expand: Viewing Logs &amp; Tuning journald Limits</b></summary>
 
 
 Follow live `sing-box` logs:
@@ -249,7 +249,7 @@ systemctl restart systemd-journald
 ```
 
 
-&lt;/details&gt;
+</details>
 
 
 > [!TIP]
